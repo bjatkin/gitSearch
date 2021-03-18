@@ -1,0 +1,7 @@
+port: 8000
+
+repos:
+  - bjatkin/KISSjs
+  - bjatkin/golf-engine
+  - bjatkin/checkSUM
+  - other/otherRepoVkk
