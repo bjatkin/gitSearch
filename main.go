@@ -21,8 +21,30 @@ type ConfigSettings struct {
 	Repos []string `yaml:"repos"`
 }
 
-// Config holds the global configuration for the service
-var Config *ConfigSettings
+// NewConfigSettings creates a new ConfigSettings struct which manages service state
+func NewConfigSettings(configFile string) (*ConfigSettings, error) {
+	yamlData, err := ioutil.ReadFile(configFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var config ConfigSettings
+	err = yaml.Unmarshal(yamlData, &config)
+	if err != nil {
+		return nil, err
+	}
+
+	if config.Port == 0 {
+		log.Println("no port specified in the yaml config file, defaulting to 8000")
+		config.Port = 8000
+	}
+
+	if len(config.Repos) == 0 {
+		return nil, errors.New("no git repos were configured in the yaml config file, at least one repo must be listed for the service to query")
+	}
+
+	return &config, nil
+}
 
 func main() {
 	configFile := "config.yaml"
@@ -33,26 +55,9 @@ func main() {
 		configFile = os.Args[1]
 	}
 
-	// Get the config file on startup to prevent repeated IO/ parsing
-	yamlData, err := ioutil.ReadFile(configFile)
+	serviceConfig, err := NewConfigSettings(configFile)
 	if err != nil {
 		log.Fatal(err)
-	}
-
-	Config = &ConfigSettings{}
-
-	err = yaml.Unmarshal(yamlData, &Config)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if Config.Port == 0 {
-		log.Println("no port specified in the yaml config file, defaulting to 8000")
-		Config.Port = 8000
-	}
-
-	if len(Config.Repos) == 0 {
-		log.Fatal(errors.New("no git repos were configured in the yaml config file, at least one repo must be listed for the service to query"))
 	}
 
 	// Register the search endpoint here
@@ -70,7 +75,7 @@ func main() {
 		}
 		req.User = r.URL.Query().Get("user")
 
-		searchResp, err := search(req)
+		searchResp, err := search(req, serviceConfig)
 		if err != nil {
 			errorResp(w, http.StatusInternalServerError, fmt.Sprintf("search query could not be completed, %s", err))
 			return
@@ -86,8 +91,8 @@ func main() {
 		w.Write(respJSON)
 	})
 
-	log.Println("starting service on port :" + strconv.Itoa(Config.Port))
-	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(Config.Port), nil))
+	log.Println("starting service on port :" + strconv.Itoa(serviceConfig.Port))
+	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(serviceConfig.Port), nil))
 }
 
 // SearchRequest represents a request made by a client to this service
@@ -112,8 +117,8 @@ func (resp *SearchResponse) AddResult(result *Result) {
 	resp.Results = append(resp.Results, result)
 }
 
-func search(req *SearchRequest) (*SearchResponse, error) {
-	u, err := buildURL(req)
+func search(req *SearchRequest, config *ConfigSettings) (*SearchResponse, error) {
+	u, err := buildURL(req, config)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +170,7 @@ func search(req *SearchRequest) (*SearchResponse, error) {
 	return ret, nil
 }
 
-func buildURL(req *SearchRequest) (*url.URL, error) {
+func buildURL(req *SearchRequest, config *ConfigSettings) (*url.URL, error) {
 	u := &url.URL{
 		Scheme: "https",
 		Host:   "api.github.com",
@@ -175,7 +180,7 @@ func buildURL(req *SearchRequest) (*url.URL, error) {
 	q.Set("q", req.SearchTerm)
 
 	var repoCount int
-	for _, repo := range Config.Repos {
+	for _, repo := range config.Repos {
 		// if a user was specified filter only by that specific user
 		// the user name must be both the prefix and of the correct length which is why we check for the / char
 		if strings.HasPrefix(repo, req.User) {
@@ -199,8 +204,6 @@ func buildURL(req *SearchRequest) (*url.URL, error) {
 		// this is a restriction of the github api
 		return nil, fmt.Errorf("query must be 256 characters or less, calculated query was %s", q)
 	}
-
-	fmt.Println("URL: ", u.String())
 
 	return u, nil
 }
